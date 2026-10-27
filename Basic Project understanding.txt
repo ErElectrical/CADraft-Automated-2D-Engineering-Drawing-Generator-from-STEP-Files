@@ -1,2 +1,66 @@
 __init__.py = package marker / package initialization file.
 In modern python project it is not needed but for ease and familiarity we are added it.
+
+
+for reading step file we are using cadquery Api
+CadQuery is an open-source Python framework designed for building parametric 3D CAD models via code. Unlike traditional GUI-based CAD software, CadQuery treats 3D designs as code scripts, making it highly effective for rapid prototyping, generating automated part variations, and version-controlling engineering parts.
+The framework is built on top of the OpenCASCADE (OCCT) modeling kernel via Python bindings (OCP). 
+This allows it to handle true Boundary Representation (B-Rep) geometry, NURBS, splines, and complex operations like fillets and lofts.
+ It is often described as doing for 3D CAD what jQuery did for JavaScript—utilizing a fluid, chainable API designed to 
+ read like a human description of a physical object
+
+ //shape of a 3d model step file
+ solids: 1          Your STEP file contains one complete 3D body.
+  faces: 18        
+   A face is a surface that forms part of the solid. Some faces could be:
+   planar surfaces
+   cylindrical surfaces  through it hole/feature detection logic is defined.
+   angled surfaces
+   other curved surfaces
+
+
+    Parameter that decdie face underlaying geometryPLANE
+    plane
+    ├── normal direction
+    └── position
+
+    CYLINDER
+    ├── radius
+    ├── axis
+    ├── center/location
+    └── height/range
+
+    SPHERE
+    ├── radius
+    └── center
+
+    CONE
+    ├── angle
+    ├── radius
+    └── axis
+
+This information becomes very important later when we do feature recognition.
+  edges: 42         An edge is where two faces meet.
+  length: 100.0     unit -- mm
+  width: 50.0
+  height: 50.0
+  center_x: 50.0
+  center_y: 25.0
+  center_z: 25.0
+
+Basic feature project flow
+STEP
+ ↓
+STEP Reader
+ ↓
+Geometry Analyzer
+ ↓
+Feature Detector   ← WE ARE HERE
+ ↓
+Projection Engine
+ ↓
+Dimension Engine
+ ↓
+Drawing Generator
+ ↓
+PDF
