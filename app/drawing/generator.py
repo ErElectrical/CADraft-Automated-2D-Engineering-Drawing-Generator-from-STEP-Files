@@ -2,6 +2,7 @@ from pathlib import Path
 import copy
 import tempfile
 import xml.etree.ElementTree as ET
+import math
 
 from cadquery import exporters
 from svglib.svglib import svg2rlg
@@ -30,33 +31,17 @@ def generate_drawing_pdf(
     output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Drawing sheet dimensions
-    sheet_width = 1100
+    # Drawing sheet dimensions
+    sheet_width = 1300
     sheet_height = 800
 
-    # Configure the three orthographic views
-    views = [
-        {
-            "name": "TOP VIEW",
-            "direction": (0, 0, 1),
-            "up": (0, 1, 0),
-            "x": 390,
-            "y": 65,
-        },
-        {
-            "name": "FRONT VIEW",
-            "direction": (0, 1, 0),
-            "up": (0, 0, 1),
-            "x": 390,
-            "y": 420,
-        },
-        {
-            "name": "SIDE VIEW",
-            "direction": (1, 0, 0),
-            "up": (0, 0, 1),
-            "x": 35,
-            "y": 420,
-        },
-    ]
+    
+    # First-angle projection layout
+    views, drawing_scale = calculate_view_layout(
+    shape,
+    sheet_width=sheet_width,
+    sheet_height=sheet_height,
+    )
 
     # Create the main SVG drawing sheet
     root = ET.Element(
@@ -100,6 +85,90 @@ def generate_drawing_pdf(
     )
     title.text = "CADraft - Engineering Drawing"
 
+    # -------------------------------------------------
+    # DRAWING TITLE BLOCK
+    # -------------------------------------------------
+
+    title_block_x = 800
+    title_block_y = 710
+    title_block_width = 470
+    title_block_height = 70
+
+    # Outer border
+    ET.SubElement(
+        root,
+        f"{{{SVG_NS}}}rect",
+        {
+            "x": str(title_block_x),
+            "y": str(title_block_y),
+            "width": str(title_block_width),
+            "height": str(title_block_height),
+            "fill": "white",
+            "stroke": "black",
+            "stroke-width": "1",
+        },
+    )
+
+    # Horizontal divider
+    add_svg_line(
+        root,
+        title_block_x,
+        title_block_y + 35,
+        title_block_x + title_block_width,
+        title_block_y + 35,
+    )
+
+    # Vertical divider
+    add_svg_line(
+        root,
+        title_block_x + 300,
+        title_block_y,
+        title_block_x + 300,
+        title_block_y + title_block_height,
+    )
+
+    # Title block labels
+    add_svg_text(
+        root,
+        title_block_x + 10,
+        title_block_y + 15,
+        "DRAWING: CADraft Engineering Drawing",
+        size=11,
+        bold=True,
+    )
+
+    add_svg_text(
+        root,
+        title_block_x + 10,
+        title_block_y + 52,
+        "UNITS: mm",
+        size=10,
+    )
+
+    add_svg_text(
+        root,
+        title_block_x + 310,
+        title_block_y + 15,
+        "SCALE: NTS",
+        size=10,
+    )
+
+    add_svg_text(
+        root,
+        title_block_x + 310,
+        title_block_y + 32,
+        "PROJECTION: FIRST ANGLE",
+        size=10,
+    )
+
+    add_svg_text(
+        root,
+        title_block_x + 310,
+        title_block_y + 52,
+        "REVISION: 00",
+        size=10,
+    )
+
 
     # -------------------------------------------------
     # PART SPECIFICATIONS
@@ -110,7 +179,7 @@ def generate_drawing_pdf(
     edge_information = edge_information or []
     features = features or []
 
-    panel_x = 780
+    panel_x = 980
     panel_y = 100
     panel_width = 290
 
@@ -214,9 +283,9 @@ def generate_drawing_pdf(
                 str(svg_path),
                 exporters.ExportTypes.SVG,
                 opt={
-                    "width": 350,
-                    "height": 260,
-                    "marginLeft": 20,
+                    "width": view["width"],
+                    "height": view["height"],
+                    "marginLeft": 15,
                     "marginTop": 25,
                     "projectionDir": view["direction"],
                     "up": view["up"],
@@ -299,6 +368,147 @@ def generate_drawing_pdf(
     print(f"PDF drawing generated: {output_pdf_path}")
 
     return output_pdf_path
+
+
+
+def calculate_view_layout(shape, sheet_width=1300, sheet_height=800):
+    """
+    Calculate view canvas sizes and positions from the STEP model's
+    bounding box.
+
+    Assumes the model's X, Y and Z axes correspond to its principal
+    drawing directions. This is an initial layout engine, not a
+    complete arbitrary-orientation projection solution.
+    """
+
+    bbox = shape.val().BoundingBox()
+
+    length = bbox.xlen
+    width = bbox.ylen
+    height = bbox.zlen
+
+    # Available drawing area, leaving room for the specifications panel.
+    area_left = 30
+    area_top = 90
+    area_width = 900
+    area_height = 570
+
+    # Dimensions of the projected views in model units.
+    projected = {
+        "RIGHT-SIDE VIEW": (width, height),
+        "FRONT VIEW": (length, height),
+        "TOP VIEW": (length, width),
+        "ISOMETRIC VIEW": (
+            (length + width) * 0.7071,
+            height * 0.8165 + (length + width) * 0.4082,
+        ),
+    }
+
+    # Reserve gaps between the view canvases.
+    gap = 25
+
+    # Estimate the combined arrangement's dimensions.
+    # Side + front + isometric are arranged horizontally.
+    row_width = (
+        projected["RIGHT-SIDE VIEW"][0]
+        + projected["FRONT VIEW"][0]
+        + projected["ISOMETRIC VIEW"][0]
+        + 2 * gap
+    )
+
+    row_height = max(
+        projected[name][1]
+        for name in ("RIGHT-SIDE VIEW", "FRONT VIEW", "ISOMETRIC VIEW")
+    )
+
+    # The top view is below the front view.
+    total_height = row_height + gap + projected["TOP VIEW"][1]
+    total_width = max(
+        row_width,
+        projected["TOP VIEW"][0],
+    )
+
+    # One common scale for all views.
+    scale = min(
+        area_width / total_width,
+        area_height / total_height,
+    )
+
+    # Add padding around each view's projected geometry.
+    margin_x = 30
+    margin_y = 35
+
+    views = [
+        {
+            "name": "RIGHT-SIDE VIEW",
+            "direction": (1, 0, 0),
+            "up": (0, 0, 1),
+            "projected_width": projected["RIGHT-SIDE VIEW"][0],
+            "projected_height": projected["RIGHT-SIDE VIEW"][1],
+        },
+        {
+            "name": "FRONT VIEW",
+            "direction": (0, 1, 0),
+            "up": (0, 0, 1),
+            "projected_width": projected["FRONT VIEW"][0],
+            "projected_height": projected["FRONT VIEW"][1],
+        },
+        {
+            "name": "TOP VIEW",
+            "direction": (0, 0, 1),
+            "up": (0, 1, 0),
+            "projected_width": projected["TOP VIEW"][0],
+            "projected_height": projected["TOP VIEW"][1],
+        },
+        {
+            "name": "ISOMETRIC VIEW",
+            "direction": (1, -1, 1),
+            "up": (0, 0, 1),
+            "projected_width": projected["ISOMETRIC VIEW"][0],
+            "projected_height": projected["ISOMETRIC VIEW"][1],
+        },
+    ]
+
+    for view in views:
+        view["width"] = max(
+            100,
+            math.ceil(view["projected_width"] * scale + 2 * margin_x),
+        )
+        view["height"] = max(
+            100,
+            math.ceil(view["projected_height"] * scale + 2 * margin_y),
+        )
+
+    # Place side, front and isometric views in a row.
+    side, front, top, iso = views
+
+    row_y = area_top + margin_y
+
+    side["x"] = area_left
+    side["y"] = row_y
+
+    front["x"] = side["x"] + side["width"] + gap
+    front["y"] = row_y
+
+    iso["x"] = front["x"] + front["width"] + gap
+    iso["y"] = row_y
+
+    # Center the top view under the front view.
+    top["x"] = (
+        front["x"]
+        + (front["width"] - top["width"]) // 2
+    )
+    top["y"] = (
+        row_y
+        + max(side["height"], front["height"], iso["height"])
+        + gap
+    )
+
+    # Store the calculated common scale for diagnostics.
+    print(f"Model bounding box: {length:.2f} x {width:.2f} x {height:.2f} mm")
+    print(f"Calculated layout scale: {scale:.3f} drawing units/mm")
+
+    return views, scale
 
 
 def add_svg_text(root, x, y, text, size=13, bold=False):
