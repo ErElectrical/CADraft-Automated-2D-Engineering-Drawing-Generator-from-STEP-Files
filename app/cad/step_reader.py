@@ -1,5 +1,6 @@
 import cadquery as cq
 from app.Model.FaceFeatures import Feature as Feature
+import math
 
 
 def read_step(file_path):
@@ -53,10 +54,12 @@ def get_shape_information(shape):
 
 def get_face_information(shape):
     """
-    Extract detailed information about every face.
+    Extract detailed information about every face,
+    including its associated edge IDs.
     """
 
     faces = shape.faces().vals()
+    edges = shape.edges().vals()
 
     face_information = []
 
@@ -64,10 +67,8 @@ def get_face_information(shape):
 
         information = get_face_geometry(face)
 
-        # Add face ID
         information["id"] = index
 
-        # Add center
         center = face.Center()
 
         information["center"] = {
@@ -76,7 +77,6 @@ def get_face_information(shape):
             "z": center.z
         }
 
-        # Add bounding box
         bbox = face.BoundingBox()
 
         information["bounding_box"] = {
@@ -84,6 +84,19 @@ def get_face_information(shape):
             "width": bbox.ylen,
             "height": bbox.zlen
         }
+
+        # Find the edges belonging to this face
+        edge_ids = []
+
+        for edge_index, edge in enumerate(edges, start=1):
+
+            for face_edge in face.Edges():
+
+                if edge.isSame(face_edge):
+                    edge_ids.append(edge_index)
+                    break
+
+        information["edge_ids"] = edge_ids
 
         face_information.append(information)
 
@@ -137,60 +150,88 @@ def get_face_geometry(face):
 
     return result
 
-def detect_features(faces, tolerance=0.01):
-    """
-    Detect unique cylindrical surfaces.
 
-    Multiple faces representing the same cylindrical surface
-    are grouped into one feature.
-
-    Note:
-        A cylindrical surface is not automatically a hole.
-        Additional geometric analysis is needed to distinguish
-        holes from external cylindrical features.
+def detect_features(shape, faces, tolerance=0.01):
     """
-    features = []
+    Detect and classify cylindrical surfaces.
+
+    The first classification stage distinguishes:
+        - Internal cylindrical surfaces (hole candidates)
+        - External cylindrical surfaces (boss candidates)
+
+    Through-hole and blind-hole classification is a later stage.
+    """
+
+    # Support Workplane and Shape objects
+    solid = shape.val() if isinstance(shape, cq.Workplane) else shape
+
+    raw_faces = solid.Faces()
+
     grouped_features = {}
 
     def rounded(value):
         return round(value / tolerance) * tolerance
 
-    for face in faces:
-        if face["type"] != "CYLINDER":
+    for face_info in faces:
+
+        if face_info["type"] != "CYLINDER":
             continue
 
-        radius = face["radius"]
-        axis = face["axis"]
-        location = face["location"]
+        face_id = face_info["id"]
 
-        # Normalize the axis direction.
-        axis_length = (
-            axis["x"] ** 2
-            + axis["y"] ** 2
-            + axis["z"] ** 2
-        ) ** 0.5
+        if face_id < 1 or face_id > len(raw_faces):
+            continue
 
-        if axis_length == 0:
+        raw_face = raw_faces[face_id - 1]
+
+        radius = face_info["radius"]
+        axis = face_info["axis"]
+        location = face_info["location"]
+
+        # Normalize axis
+        axis_length = math.sqrt(
+            axis["x"]**2 +
+            axis["y"]**2 +
+            axis["z"]**2
+        )
+
+        if axis_length < 1e-9:
             continue
 
         ax = axis["x"] / axis_length
         ay = axis["y"] / axis_length
         az = axis["z"] / axis_length
 
-        # Make opposite directions use the same orientation.
+        # Normalize opposite directions
         for component in (ax, ay, az):
             if abs(component) > tolerance:
                 if component < 0:
                     ax, ay, az = -ax, -ay, -az
                 break
 
-        # Calculate a representative point for the cylinder axis.
-        # Points along the same axis produce the same perpendicular
-        # location, even if their original coordinates differ.
+        normalized_axis = {
+            "x": ax,
+            "y": ay,
+            "z": az
+        }
+
+        # Classify the cylindrical surface
+        classification = classify_cylindrical_face(
+            solid,
+            raw_face,
+            radius,
+            normalized_axis,
+            location
+        )
+
+        if classification == "UNKNOWN":
+            continue
+
+        # Calculate a representative point on the cylinder axis
         dot = (
-            location["x"] * ax
-            + location["y"] * ay
-            + location["z"] * az
+            location["x"] * ax +
+            location["y"] * ay +
+            location["z"] * az
         )
 
         px = location["x"] - dot * ax
@@ -198,48 +239,54 @@ def detect_features(faces, tolerance=0.01):
         pz = location["z"] - dot * az
 
         key = (
+            classification,
             rounded(radius),
             rounded(ax),
             rounded(ay),
             rounded(az),
             rounded(px),
             rounded(py),
-            rounded(pz),
+            rounded(pz)
         )
 
         if key not in grouped_features:
+
+            feature_type = (
+                "CYLINDRICAL_HOLE_CANDIDATE"
+                if classification == "HOLE_CANDIDATE"
+                else "CYLINDRICAL_BOSS_CANDIDATE"
+            )
+
             grouped_features[key] = {
-                "feature_type": "CYLINDRICAL_FEATURE",
+                "feature_type": feature_type,
                 "parameters": {
                     "radius": radius,
                     "diameter": radius * 2,
-                    "axis": {
-                        "x": ax,
-                        "y": ay,
-                        "z": az,
-                    },
-                    "location": {
-                        "x": location["x"],
-                        "y": location["y"],
-                        "z": location["z"],
-                    },
+                    "axis": normalized_axis,
+                    "location": location.copy()
                 },
                 "face_ids": [],
+                "confidence": 0.90
             }
 
-        grouped_features[key]["face_ids"].append(face["id"])
+        grouped_features[key]["face_ids"].append(face_id)
 
-    # Convert grouped results to your existing Feature model.
+    # Convert grouped results to Feature objects
+    features = []
+
     for item in grouped_features.values():
+
         features.append(
             Feature(
                 feature_type=item["feature_type"],
                 parameters=item["parameters"],
                 face_ids=item["face_ids"],
+                confidence=item["confidence"]
             )
         )
 
     return features
+
 
 def get_edge_information(shape):
     """
@@ -343,3 +390,71 @@ def get_face_adjacency(shape):
         })
 
     return adjacency
+
+
+
+
+def classify_cylindrical_face(solid, face, radius, axis, location):
+    """
+    Classify a cylindrical face as an internal bore or
+    external boss by testing material on either side.
+
+    Returns:
+        HOLE_CANDIDATE
+        BOSS_CANDIDATE
+        UNKNOWN
+    """
+
+    center = face.Center()
+
+    ax, ay, az = axis["x"], axis["y"], axis["z"]
+
+    # Vector from cylinder axis to face center
+    dx = center.x - location["x"]
+    dy = center.y - location["y"]
+    dz = center.z - location["z"]
+
+    # Remove axial component to get radial direction
+    dot = dx * ax + dy * ay + dz * az
+
+    rx = dx - dot * ax
+    ry = dy - dot * ay
+    rz = dz - dot * az
+
+    radial_length = math.sqrt(rx**2 + ry**2 + rz**2)
+
+    if radial_length < 1e-9:
+        return "UNKNOWN"
+
+    rx /= radial_length
+    ry /= radial_length
+    rz /= radial_length
+
+    # Sample just inside and outside the cylindrical surface
+    epsilon = min(max(radius * 0.001, 0.001), 0.01)
+
+    outside_point = cq.Vector(
+        center.x + rx * epsilon,
+        center.y + ry * epsilon,
+        center.z + rz * epsilon
+    )
+
+    inside_point = cq.Vector(
+        center.x - rx * epsilon,
+        center.y - ry * epsilon,
+        center.z - rz * epsilon
+    )
+
+    outside_material = solid.isInside(outside_point, 1e-7)
+    inside_material = solid.isInside(inside_point, 1e-7)
+
+    # For a hole, material is on the radial exterior.
+    if outside_material and not inside_material:
+        return "HOLE_CANDIDATE"
+
+    # For a boss, material is toward the cylinder axis.
+    if inside_material and not outside_material:
+        return "BOSS_CANDIDATE"
+
+    return "UNKNOWN"
+

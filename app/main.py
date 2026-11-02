@@ -7,6 +7,18 @@ from app.cad.step_reader import (
     get_edge_information,
 )
 from app.drawing.generator import generate_drawing_pdf
+import time
+
+def measure_time(name, function, *args, **kwargs):
+    start = time.perf_counter()
+
+    result = function(*args, **kwargs)
+
+    elapsed = time.perf_counter() - start
+
+    print(f"{name}: {elapsed:.3f} seconds")
+
+    return result
 
 
 def main():
@@ -29,7 +41,10 @@ def main():
     adjacency = get_face_adjacency(cad_shape)
 
     # 3. Detect cylindrical features
-    features = detect_features(faces)
+    features = detect_features(
+                cad_shape,
+                faces
+            )
 
     # 4. Generate PDF with model specifications and features
     output_pdfpath = "output/drawing1.pdf"
