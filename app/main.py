@@ -17,7 +17,7 @@ def main():
         "and produces 2D engineering drawings in PDF format."
     )
 
-    file_path = "sample_step/Part1.stp"
+    file_path = "sample_step/Part2.step"
 
     # 1. Load the STEP file
     cad_shape = read_step(file_path)

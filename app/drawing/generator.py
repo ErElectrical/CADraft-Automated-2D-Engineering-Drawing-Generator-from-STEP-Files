@@ -3,10 +3,14 @@ import copy
 import tempfile
 import xml.etree.ElementTree as ET
 import math
+import cadquery as cq
 
 from cadquery import exporters
 from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF
+
+import re
+from svgpathtools import parse_path
 
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -29,6 +33,7 @@ def generate_drawing_pdf(
 
     output_pdf_path = Path(output_pdf_path)
     output_pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    # 
 
     # Drawing sheet dimensions
     # Drawing sheet dimensions
@@ -297,6 +302,9 @@ def generate_drawing_pdf(
                 },
             )
 
+            # import shutil
+            # shutil.copy(svg_path, f"view_{index}.svg")  # Save a copy for debugging
+
             # Read the generated SVG
             view_tree = ET.parse(svg_path)
             view_root = view_tree.getroot()
@@ -326,6 +334,112 @@ def generate_drawing_pdf(
             #    This allows the function to reuse the exported geometry without moving or modifying the element in the original parsed SVG tree.
             placement.append(copy.deepcopy(geometry_group))
 
+            # -------------------------------------------------
+            # ADD OVERALL DIMENSIONS
+            # -------------------------------------------------
+
+            view_name = view["name"]
+
+            length = float(shape_information.get("length", 0))
+            width = float(shape_information.get("width", 0))
+            height = float(shape_information.get("height", 0))
+
+            # Calculate actual geometry boundaries
+            bounds = get_svg_geometry_bounds(view_root)
+
+            left = bounds["left"]
+            right = bounds["right"]
+            top = bounds["top"]
+            bottom = bounds["bottom"]
+
+            # Dimension spacing from actual geometry
+            dimension_offset = 22
+
+            # FRONT VIEW
+            # Horizontal = Length X
+            # Vertical   = Height Z
+
+            if view_name == "FRONT VIEW":
+
+                # Length X
+                add_dimension(
+                    placement,
+                    left,
+                    bottom,
+                    right,
+                    bottom,
+                    f"{length:.2f} mm",
+                    offset=dimension_offset
+                )
+
+                # Height Z
+                add_dimension(
+                    placement,
+                    right,
+                    top,
+                    right,
+                    bottom,
+                    f"{height:.2f} mm",
+                    offset=dimension_offset
+                )
+
+
+            # RIGHT-SIDE VIEW
+            # Horizontal = Width Y
+            # Vertical   = Height Z
+
+            elif view_name == "RIGHT-SIDE VIEW":
+
+                # Width Y
+                add_dimension(
+                    placement,
+                    left,
+                    bottom,
+                    right,
+                    bottom,
+                    f"{width:.2f} mm",
+                    offset=dimension_offset
+                )
+
+                # Height Z
+                add_dimension(
+                    placement,
+                    right,
+                    top,
+                    right,
+                    bottom,
+                    f"{height:.2f} mm",
+                    offset=dimension_offset
+                )
+
+
+            # TOP VIEW
+            # Horizontal = Length X
+            # Vertical   = Width Y
+
+            elif view_name == "TOP VIEW":
+
+            # Length X
+                add_dimension(
+                    placement,
+                    left,
+                    bottom,
+                    right,
+                    bottom,
+                    f"{length:.2f} mm",
+                    offset=dimension_offset
+                )
+
+                # Width Y
+                add_dimension(
+                    placement,
+                    right,
+                    top,
+                    right,
+                    bottom,
+                    f"{width:.2f} mm",
+                    offset=dimension_offset
+                )
             # Add view label
             label = ET.SubElement(
                 placement,
@@ -373,27 +487,24 @@ def generate_drawing_pdf(
 
 def calculate_view_layout(shape, sheet_width=1300, sheet_height=800):
     """
-    Calculate view canvas sizes and positions from the STEP model's
-    bounding box.
+    Calculate view canvas sizes and positions for a first-angle drawing.
 
-    Assumes the model's X, Y and Z axes correspond to its principal
-    drawing directions. This is an initial layout engine, not a
-    complete arbitrary-orientation projection solution.
+    Arrangement:
+        Right-side view | Front view | Isometric view
+                              Top view below front
+
+    Note: The scale is an estimate because CadQuery fits each exported
+    projection to its SVG canvas independently.
     """
 
-    bbox = shape.val().BoundingBox()
+    # Support both CadQuery Workplane and Shape objects.
+    solid = shape.val() if isinstance(shape, cq.Workplane) else shape
+    bbox = solid.BoundingBox()
 
     length = bbox.xlen
     width = bbox.ylen
     height = bbox.zlen
 
-    # Available drawing area, leaving room for the specifications panel.
-    area_left = 30
-    area_top = 90
-    area_width = 900
-    area_height = 570
-
-    # Dimensions of the projected views in model units.
     projected = {
         "RIGHT-SIDE VIEW": (width, height),
         "FRONT VIEW": (length, height),
@@ -404,85 +515,93 @@ def calculate_view_layout(shape, sheet_width=1300, sheet_height=800):
         ),
     }
 
-    # Reserve gaps between the view canvases.
+    # Drawing area reserved for views.
+    area_left = 30
+    area_top = 90
+    area_width = 900
+    area_height = 570
+
+    # Canvas margins and spacing.
+    margin_x = 30
+    margin_y = 35
     gap = 25
 
-    # Estimate the combined arrangement's dimensions.
-    # Side + front + isometric are arranged horizontally.
-    row_width = (
-        projected["RIGHT-SIDE VIEW"][0]
-        + projected["FRONT VIEW"][0]
-        + projected["ISOMETRIC VIEW"][0]
+    # The side, front, and isometric views occupy one row.
+    row_width_model = sum(
+        projected[name][0]
+        for name in (
+            "RIGHT-SIDE VIEW",
+            "FRONT VIEW",
+            "ISOMETRIC VIEW",
+        )
+    )
+
+    row_height_model = max(
+        projected[name][1]
+        for name in (
+            "RIGHT-SIDE VIEW",
+            "FRONT VIEW",
+            "ISOMETRIC VIEW",
+        )
+    )
+
+    top_width_model, top_height_model = projected["TOP VIEW"]
+
+    # Include canvas margins in the available-space calculation.
+    required_width_model = (
+        row_width_model
+        + 3 * 2 * margin_x
         + 2 * gap
     )
 
-    row_height = max(
-        projected[name][1]
-        for name in ("RIGHT-SIDE VIEW", "FRONT VIEW", "ISOMETRIC VIEW")
+    required_height_model = (
+        row_height_model
+        + 2 * margin_y
+        + gap
+        + top_height_model
+        + 2 * margin_y
     )
 
-    # The top view is below the front view.
-    total_height = row_height + gap + projected["TOP VIEW"][1]
-    total_width = max(
-        row_width,
-        projected["TOP VIEW"][0],
+    scale_x = area_width / required_width_model
+    scale_y = area_height / required_height_model
+    drawing_scale = min(
+    area_width / max(required_width_model, 1),
+    area_height / max(required_height_model, 1),
     )
 
-    # One common scale for all views.
-    scale = min(
-        area_width / total_width,
-        area_height / total_height,
-    )
+    views = []
 
-    # Add padding around each view's projected geometry.
-    margin_x = 30
-    margin_y = 35
-
-    views = [
-        {
-            "name": "RIGHT-SIDE VIEW",
-            "direction": (1, 0, 0),
-            "up": (0, 0, 1),
-            "projected_width": projected["RIGHT-SIDE VIEW"][0],
-            "projected_height": projected["RIGHT-SIDE VIEW"][1],
-        },
-        {
-            "name": "FRONT VIEW",
-            "direction": (0, 1, 0),
-            "up": (0, 0, 1),
-            "projected_width": projected["FRONT VIEW"][0],
-            "projected_height": projected["FRONT VIEW"][1],
-        },
-        {
-            "name": "TOP VIEW",
-            "direction": (0, 0, 1),
-            "up": (0, 1, 0),
-            "projected_width": projected["TOP VIEW"][0],
-            "projected_height": projected["TOP VIEW"][1],
-        },
-        {
-            "name": "ISOMETRIC VIEW",
-            "direction": (1, -1, 1),
-            "up": (0, 0, 1),
-            "projected_width": projected["ISOMETRIC VIEW"][0],
-            "projected_height": projected["ISOMETRIC VIEW"][1],
-        },
+    definitions = [
+        ("RIGHT-SIDE VIEW", (1, 0, 0), (0, 0, 1)),
+        ("FRONT VIEW", (0, 1, 0), (0, 0, 1)),
+        ("TOP VIEW", (0, 0, 1), (0, 1, 0)),
+        ("ISOMETRIC VIEW", (1, -1, 1), (0, 0, 1)),
     ]
 
-    for view in views:
-        view["width"] = max(
-            100,
-            math.ceil(view["projected_width"] * scale + 2 * margin_x),
+    for name, direction, up in definitions:
+        projected_width, projected_height = projected[name]
+
+        canvas_width = math.ceil(
+            projected_width * drawing_scale + 2 * margin_x
         )
-        view["height"] = max(
-            100,
-            math.ceil(view["projected_height"] * scale + 2 * margin_y),
+        canvas_height = math.ceil(
+            projected_height * drawing_scale + 2 * margin_y
         )
 
-    # Place side, front and isometric views in a row.
+        views.append({
+            "name": name,
+            "direction": direction,
+            "up": up,
+            "projected_width": projected_width,
+            "projected_height": projected_height,
+            "width": max(100, canvas_width),
+            "height": max(100, canvas_height),
+        })
+
     side, front, top, iso = views
 
-    row_y = area_top + margin_y
+    # First-angle placement.
+    row_y = area_top
 
     side["x"] = area_left
     side["y"] = row_y
@@ -493,22 +612,25 @@ def calculate_view_layout(shape, sheet_width=1300, sheet_height=800):
     iso["x"] = front["x"] + front["width"] + gap
     iso["y"] = row_y
 
-    # Center the top view under the front view.
+    # Top view directly below the front view.
     top["x"] = (
         front["x"]
         + (front["width"] - top["width"]) // 2
     )
+
     top["y"] = (
         row_y
         + max(side["height"], front["height"], iso["height"])
         + gap
     )
 
-    # Store the calculated common scale for diagnostics.
-    print(f"Model bounding box: {length:.2f} x {width:.2f} x {height:.2f} mm")
-    print(f"Calculated layout scale: {scale:.3f} drawing units/mm")
+    print(
+        f"Model dimensions: "
+        f"{length:.2f} x {width:.2f} x {height:.2f} mm"
+    )
+    print(f"Estimated layout scale: {drawing_scale:.3f}")
 
-    return views, scale
+    return views, drawing_scale
 
 
 def add_svg_text(root, x, y, text, size=13, bold=False):
@@ -522,11 +644,12 @@ def add_svg_text(root, x, y, text, size=13, bold=False):
             "font-size": str(size),
             "font-weight": "bold" if bold else "normal",
             "fill": "black",
+            "text-anchor": "start" ,
         },
     )
+
     element.text = str(text)
     return element
-
 
 def add_svg_line(root, x1, y1, x2, y2, stroke="black", width=1):
     return ET.SubElement(
@@ -593,4 +716,95 @@ def add_dimension(root, x1, y1, x2, y2, label, offset=20):
             label,
             size=12,
         )
+
+
+
+def get_svg_geometry_bounds(svg_root):
+    """
+    Calculate the actual projected geometry bounds in SVG coordinates.
+
+    Supports the CadQuery SVG transform format:
+    scale(sx, sy) translate(tx, ty)
+    """
+
+    geometry_group = svg_root.find(f"{{{SVG_NS}}}g")
+
+    if geometry_group is None:
+        raise RuntimeError("SVG geometry group not found")
+
+    path_bounds = []
+
+    # Collect bounds from every SVG path
+    for element in geometry_group.iter():
+        if element.tag.endswith("path"):
+            d = element.get("d")
+
+            if not d:
+                continue
+
+            path = parse_path(d)
+
+            xmin, xmax, ymin, ymax = path.bbox()
+
+            path_bounds.append((xmin, xmax, ymin, ymax))
+
+    if not path_bounds:
+        raise RuntimeError("No SVG paths found")
+
+    # Original geometry bounds
+    xmin = min(b[0] for b in path_bounds)
+    xmax = max(b[1] for b in path_bounds)
+    ymin = min(b[2] for b in path_bounds)
+    ymax = max(b[3] for b in path_bounds)
+
+    # Read CadQuery's outer group transformation
+    transform = geometry_group.get("transform", "")
+
+    scale_match = re.search(
+        r"scale\(\s*([-0-9.eE]+)\s*,\s*([-0-9.eE]+)\s*\)",
+        transform
+    )
+
+    translate_match = re.search(
+        r"translate\(\s*([-0-9.eE]+)\s*,\s*([-0-9.eE]+)\s*\)",
+        transform
+    )
+
+    if not scale_match or not translate_match:
+        raise RuntimeError(
+            f"Unsupported SVG transform: {transform}"
+        )
+
+    sx = float(scale_match.group(1))
+    sy = float(scale_match.group(2))
+
+    tx = float(translate_match.group(1))
+    ty = float(translate_match.group(2))
+
+    # Transform all four corners
+    corners = [
+        (xmin, ymin),
+        (xmin, ymax),
+        (xmax, ymin),
+        (xmax, ymax)
+    ]
+
+    transformed = [
+        (sx * (x + tx), sy * (y + ty))
+        for x, y in corners
+    ]
+
+    final_xmin = min(p[0] for p in transformed)
+    final_xmax = max(p[0] for p in transformed)
+
+    final_ymin = min(p[1] for p in transformed)
+    final_ymax = max(p[1] for p in transformed)
+
+    return {
+        "left": final_xmin,
+        "right": final_xmax,
+        "top": final_ymin,
+        "bottom": final_ymax
+    }
+
 
