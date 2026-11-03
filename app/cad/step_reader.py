@@ -61,6 +61,12 @@ def get_face_information(shape):
     faces = shape.faces().vals()
     edges = shape.edges().vals()
 
+    # Build edge-to-ID lookup once
+    edge_lookup = {
+        edge.hashCode(): index
+        for index, edge in enumerate(edges, start=1)
+    }
+
     face_information = []
 
     for index, face in enumerate(faces, start=1):
@@ -85,16 +91,15 @@ def get_face_information(shape):
             "height": bbox.zlen
         }
 
-        # Find the edges belonging to this face
+        # Find associated edge IDs
         edge_ids = []
 
-        for edge_index, edge in enumerate(edges, start=1):
+        for face_edge in face.Edges():
 
-            for face_edge in face.Edges():
+            edge_id = edge_lookup.get(face_edge.hashCode())
 
-                if edge.isSame(face_edge):
-                    edge_ids.append(edge_index)
-                    break
+            if edge_id is not None:
+                edge_ids.append(edge_id)
 
         information["edge_ids"] = edge_ids
 
@@ -404,8 +409,12 @@ def classify_cylindrical_face(solid, face, radius, axis, location):
         BOSS_CANDIDATE
         UNKNOWN
     """
+    vertices = face.Vertices()
+    if not vertices:
+        return "UNKNOWN"
 
-    center = face.Center()
+    center = vertices[0].Center()
+     
 
     ax, ay, az = axis["x"], axis["y"], axis["z"]
 
