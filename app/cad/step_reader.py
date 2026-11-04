@@ -399,31 +399,31 @@ def get_face_adjacency(shape):
 
 
 
+
 def classify_cylindrical_face(solid, face, radius, axis, location):
     """
-    Classify a cylindrical face as an internal bore or
-    external boss by testing material on either side.
+    Classify a cylindrical face as an internal hole or external boss.
 
-    Returns:
-        HOLE_CANDIDATE
-        BOSS_CANDIDATE
-        UNKNOWN
+    Uses a point in the interior of the cylindrical face rather
+    than a boundary vertex.
     """
-    vertices = face.Vertices()
-    if not vertices:
-        return "UNKNOWN"
-
-    center = vertices[0].Center()
-     
 
     ax, ay, az = axis["x"], axis["y"], axis["z"]
 
-    # Vector from cylinder axis to face center
+    # Get a point near the middle of the cylindrical face
+    u_min, u_max, v_min, v_max = face._uvBounds()
+
+    u_mid = (u_min + u_max) / 2
+    v_mid = (v_min + v_max) / 2
+
+    center = face.positionAt(u_mid, v_mid)
+
+    # Vector from cylinder axis to the selected surface point
     dx = center.x - location["x"]
     dy = center.y - location["y"]
     dz = center.z - location["z"]
 
-    # Remove axial component to get radial direction
+    # Remove axial component
     dot = dx * ax + dy * ay + dz * az
 
     rx = dx - dot * ax
@@ -439,31 +439,276 @@ def classify_cylindrical_face(solid, face, radius, axis, location):
     ry /= radial_length
     rz /= radial_length
 
-    # Sample just inside and outside the cylindrical surface
-    epsilon = min(max(radius * 0.001, 0.001), 0.01)
+    # Sampling distance
+    epsilon = min(max(radius * 0.005, 0.001), 0.02)
 
+    # Point radially outside the cylinder
     outside_point = cq.Vector(
         center.x + rx * epsilon,
         center.y + ry * epsilon,
         center.z + rz * epsilon
     )
 
+    # Point radially inside the cylinder
     inside_point = cq.Vector(
         center.x - rx * epsilon,
         center.y - ry * epsilon,
         center.z - rz * epsilon
     )
 
-    outside_material = solid.isInside(outside_point, 1e-7)
-    inside_material = solid.isInside(inside_point, 1e-7)
+    outside_material = solid.isInside(outside_point, 1e-6)
+    inside_material = solid.isInside(inside_point, 1e-6)
 
-    # For a hole, material is on the radial exterior.
+    # Internal cylindrical surface: material is outside the radius
     if outside_material and not inside_material:
         return "HOLE_CANDIDATE"
 
-    # For a boss, material is toward the cylinder axis.
+    # External cylindrical surface: material is inside the radius
     if inside_material and not outside_material:
         return "BOSS_CANDIDATE"
 
     return "UNKNOWN"
+
+
+
+
+
+
+def analyze_holes(shape, faces, features, probe_distance=1.0,
+                  tolerance=0.01):
+
+    raw_faces = (
+        shape.val().Faces()
+        if isinstance(shape, cq.Workplane)
+        else shape.Faces()
+    )
+
+    # Only consider features already identified as hole candidates
+    hole_features = [
+        feature for feature in features
+        if "HOLE" in feature.feature_type.upper()
+    ]
+
+    results = []
+
+    def get_vector(data):
+        return cq.Vector(
+            data["x"],
+            data["y"],
+            data["z"]
+        )
+
+    def same_cylinder(feature_a, feature_b):
+
+        params_a = feature_a.parameters
+        params_b = feature_b.parameters
+
+        radius_a = params_a["radius"]
+        radius_b = params_b["radius"]
+
+        if abs(radius_a - radius_b) > tolerance:
+            return False
+
+        axis_a = get_vector(params_a["axis"]).normalized()
+        axis_b = get_vector(params_b["axis"]).normalized()
+
+        # Check whether axes are parallel
+        if abs(axis_a.dot(axis_b)) < 0.9999:
+            return False
+
+        location_a = get_vector(params_a["location"])
+        location_b = get_vector(params_b["location"])
+
+        # Check whether both axes lie on the same line
+        distance = (
+            location_b.sub(location_a)
+            .cross(axis_a)
+            .Length
+        )
+
+        return distance <= tolerance
+
+    # Group coaxial cylindrical features
+    groups = []
+
+    for feature in hole_features:
+
+        matched_group = None
+
+        for group in groups:
+            if same_cylinder(group[0], feature):
+                matched_group = group
+                break
+
+        if matched_group is None:
+            groups.append([feature])
+        else:
+            matched_group.append(feature)
+
+    # Analyze each grouped hole
+    for index, group in enumerate(groups, start=1):
+
+        first = group[0]
+        params = first.parameters
+
+        radius = params["radius"]
+        diameter = radius * 2
+
+        axis = get_vector(params["axis"]).normalized()
+        location = get_vector(params["location"])
+
+        axial_values = []
+
+        face_ids = []
+
+        # Calculate axial extent of every cylindrical face
+        for feature in group:
+
+            for face_id in feature.face_ids:
+
+                if face_id in face_ids:
+                    continue
+
+                face_ids.append(face_id)
+
+                face = raw_faces[face_id - 1]
+
+                u_min, u_max, v_min, v_max = face._uvBounds()
+
+                u_mid = (u_min + u_max) / 2
+
+                start = face.positionAt(u_mid, v_min)
+                end = face.positionAt(u_mid, v_max)
+
+                start_projection = (
+                    start.sub(location).dot(axis)
+                )
+
+                end_projection = (
+                    end.sub(location).dot(axis)
+                )
+
+                axial_values.extend([
+                    start_projection,
+                    end_projection
+                ])
+
+        if not axial_values:
+            continue
+
+        axial_min = min(axial_values)
+        axial_max = max(axial_values)
+
+        cylindrical_depth = axial_max - axial_min
+
+        start_point = location.add(
+            axis.multiply(axial_min)
+        )
+
+        end_point = location.add(
+            axis.multiply(axial_max)
+        )
+
+        # Build two perpendicular vectors around the hole axis
+        reference = (
+            cq.Vector(1, 0, 0)
+            if abs(axis.x) < 0.9
+            else cq.Vector(0, 1, 0)
+        )
+
+        radial_1 = axis.cross(reference).normalized()
+        radial_2 = axis.cross(radial_1).normalized()
+
+        def check_opening(point, direction):
+
+            # Sample eight points around the hole opening
+            outside_count = 0
+
+            sample_radius = radius * 0.8
+
+            for i in range(8):
+
+                angle = 2 * math.pi * i / 8
+
+                radial = (
+                    radial_1.multiply(math.cos(angle))
+                    .add(radial_2.multiply(math.sin(angle)))
+                )
+
+                sample_point = (
+                    point
+                    .add(direction.multiply(probe_distance))
+                    .add(radial.multiply(sample_radius))
+                )
+
+               
+                solid = (
+                    shape.val()
+                    if isinstance(shape, cq.Workplane)
+                    else shape
+                )
+
+                if not solid.isInside(sample_point, tolerance):
+                    outside_count += 1
+
+            return outside_count >= 7
+
+        # Check both axial ends
+        start_open = check_opening(start_point, axis.multiply(-1))
+
+        end_open = check_opening(end_point, axis)
+
+        if start_open and end_open:
+            hole_type = "LIKELY_THROUGH"
+
+        elif start_open != end_open:
+            hole_type = "LIKELY_BLIND"
+
+        else:
+            hole_type = "UNKNOWN"
+
+        results.append({
+
+            "hole_id": index,
+
+            "diameter": diameter,
+            "radius": radius,
+
+            "axis": {
+                "x": axis.x,
+                "y": axis.y,
+                "z": axis.z
+            },
+
+            "location": {
+                "x": location.x,
+                "y": location.y,
+                "z": location.z
+            },
+
+            "start_point": {
+                "x": start_point.x,
+                "y": start_point.y,
+                "z": start_point.z
+            },
+
+            "end_point": {
+                "x": end_point.x,
+                "y": end_point.y,
+                "z": end_point.z
+            },
+
+            "cylindrical_depth": cylindrical_depth,
+
+            "hole_type": hole_type,
+
+            "face_ids": face_ids
+
+        })
+
+    return results
+
+
+
+
 

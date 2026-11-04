@@ -5,6 +5,7 @@ from app.cad.step_reader import (
     get_shape_information,
     detect_features,
     get_edge_information,
+    analyze_holes
 )
 from app.drawing.generator import generate_drawing_pdf
 import time
@@ -47,7 +48,7 @@ def main():
     #faces = get_face_information(cad_shape)
     faces = measure_time("Face information extraction", get_face_information, cad_shape)
 
-    cylinderical_faces = [face for face in faces if face["type"] == "cylinder"]
+    cylinderical_faces = [face for face in faces if face["type"].lower() == "cylinder"]
     print(f"Detected {len(cylinderical_faces)} cylindrical faces.")
 
     #edges = get_edge_information(cad_shape)
@@ -63,7 +64,24 @@ def main():
     #             faces
     #         )
 
+
+    
+
+    
+
     features = measure_time("Feature detection", detect_features, cad_shape, faces)
+
+    # 4. Analyze complete hole features
+    holes = measure_time("Hole analysis", analyze_holes, cad_shape, faces, features)
+    print("\n========== HOLE ANALYSIS ==========")
+    
+    for hole in holes:
+    
+        print(f"\nHole ID: {hole['hole_id']}")
+        print(f"Diameter: {hole['diameter']:.3f} mm")
+        print(f"Cylindrical Depth: {hole['cylindrical_depth']:.3f} mm")
+        print(f"Classification: {hole['hole_type']}")
+        print(f"Face IDs: {hole['face_ids']}")
 
     # 4. Generate PDF with model specifications and features
     output_pdfpath = "output/drawing1.pdf"
@@ -75,6 +93,7 @@ def main():
         face_information=faces,
         edge_information=edges,
         features=features,
+        holes=holes
     )
 
     print(f"Drawing generated successfully: {output_pdfpath}")
@@ -82,48 +101,48 @@ def main():
     # 5. Print detected features
     print("\n========== DETECTED FEATURES ==========")
 
-    print("\n========== CYLINDER FACE TEST ==========")
+    # print("\n========== CYLINDER FACE TEST ==========")
 
-    # Get cylindrical face information
-    cylinder_faces = [
-        face for face in faces
-        if face["type"] == "CYLINDER"
-    ]
+    # # Get cylindrical face information
+    # cylinder_faces = [
+    #     face for face in faces
+    #     if face["type"] == "CYLINDER"
+    # ]
 
-    if cylinder_faces:
+    # if cylinder_faces:
 
-        test_face_info = cylinder_faces[0]
+    #     test_face_info = cylinder_faces[0]
 
-        # Get the actual CadQuery face using its ID
-        raw_faces = cad_shape.val().Faces() if isinstance(cad_shape, cq.Workplane) else cad_shape.Faces()
+    #     # Get the actual CadQuery face using its ID
+    #     raw_faces = cad_shape.val().Faces() if isinstance(cad_shape, cq.Workplane) else cad_shape.Faces()
 
-        test_face = raw_faces[test_face_info["id"] - 1]
+    #     test_face = raw_faces[test_face_info["id"] - 1]
 
-        # Get UV bounds
-        u_min, u_max, v_min, v_max = test_face._uvBounds()
+    #     # Get UV bounds
+    #     u_min, u_max, v_min, v_max = test_face._uvBounds()
 
-        print("U Min:", u_min)
-        print("U Max:", u_max)
-        print("V Min:", v_min)
-        print("V Max:", v_max)
+    #     print("U Min:", u_min)
+    #     print("U Max:", u_max)
+    #     print("V Min:", v_min)
+    #     print("V Max:", v_max)
 
-        start_point = test_face.positionAt(
-            u_min, v_min
-        )
+    #     start_point = test_face.positionAt(
+    #         u_min, v_min
+    #     )
 
-        end_point = test_face.positionAt(
-            u_min, v_max
-        )
+    #     end_point = test_face.positionAt(
+    #         u_min, v_max
+    #     )
 
-        print("Start:", start_point)
-        print("End:", end_point)
+    #     print("Start:", start_point)
+    #     print("End:", end_point)
 
-        depth = start_point.sub(end_point).Length()
+    #     depth = start_point.sub(end_point).Length
 
-        print("Axial Length:", depth)
+    #     print("Axial Length:", depth)
 
-    else:
-        print("No cylindrical faces found.")
+    # else:
+    #     print("No cylindrical faces found.")
 
 
     for feature in features:
