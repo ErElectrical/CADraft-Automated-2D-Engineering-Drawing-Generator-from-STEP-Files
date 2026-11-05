@@ -114,12 +114,6 @@ CADraft/
 
 ## Installation
 
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/CADraft.git
-cd CADraft
-```
 
 ### 2. Create a virtual environment
 
