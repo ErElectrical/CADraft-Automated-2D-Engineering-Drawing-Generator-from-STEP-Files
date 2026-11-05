@@ -64,3 +64,61 @@ Dimension Engine
 Drawing Generator
  ↓
 PDF
+
+
+RoadMap of further development of Project.
+Vision -- The long-term vision is simple: CADraft receives a STEP file, understands the component, 
+          plans its drawing and delivers a complete engineering document.
+          The user should not need another CAD application to discover what CADraft left out.
+
+
+
+Phase 1 — Geometry intelligence
+Start here
+
+Objective: Understand what actually exists in the STEP model.
+- Group connected and related cylindrical faces.
+- Identify holes, shafts, bosses, slots and pockets.
+- Recognize concentric and stepped features.
+- Determine feature locations, sizes and depths.
+  
+  Phase 2 — Feature recognition
+  
+  Objective: Understand the engineering meaning of geometry.
+- Through holes and blind holes.
+- Counterbores and countersinks.
+- Threads where STEP geometry supports recognition.
+- Fillets, chamfers and grooves.
+  
+  Phase 3 — Dimension engine
+  
+  Objective: Calculate accurate dimensions independently of drawing layout.
+- Diameter and radius.
+- Hole-center coordinates.
+- Linear and angular dimensions.
+- Depth and step dimensions.
+- Repeated feature patterns.
+  
+  Phase 4 — Intelligent drawing planner
+  
+  Objective: Decide how to communicate the complete geometry.
+- Select appropriate orthographic views.
+- Generate sectional views automatically.
+- Generate detail views for small features.
+- Avoid duplicate and overlapping dimensions.
+  
+  Phase 5 — Drawing validation
+  
+  Objective: Ensure no meaningful feature is silently omitted.
+- Feature coverage report.
+- Dimension accuracy checks.
+- Annotation collision checks.
+- Unresolved geometry warnings.
+  
+  Phase 6 — Professional output
+  
+  Objective: Produce a complete engineering deliverable.
+- Drawing standards and title block.
+- Scale and projection symbols.
+- Material, tolerances and surface finish inputs.
+- PDF and eventually DXF export.

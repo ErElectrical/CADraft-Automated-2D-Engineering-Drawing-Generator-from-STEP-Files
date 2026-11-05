@@ -31,17 +31,17 @@ def main():
         "and produces 2D engineering drawings in PDF format."
     )
 
-    file_path = "sample_step/Part2.step"
+    file_path = "sample_step/Part1.stp"
 
     
 
     # 1. Load the STEP file
-    #cad_shape = read_step(file_path)
+    
     cad_shape =  measure_time("STEP file loading", read_step, file_path)
 
 
     # 2. Extract model information
-    #information = get_shape_information(cad_shape)
+    
 
     information = measure_time("Shape information extraction", get_shape_information, cad_shape)
 
@@ -54,20 +54,12 @@ def main():
     #edges = get_edge_information(cad_shape)
     edges = measure_time("Edge information extraction", get_edge_information, cad_shape)
 
-    #adjacency = get_face_adjacency(cad_shape)
+    
 
     #adjacency = measure_time("Face adjacency extraction", get_face_adjacency, cad_shape)
 
     # 3. Detect cylindrical features
-    # features = detect_features(
-    #             cad_shape,
-    #             faces
-    #         )
-
-
-    
-
-    
+      
 
     features = measure_time("Feature detection", detect_features, cad_shape, faces)
 
@@ -84,10 +76,12 @@ def main():
         print(f"Face IDs: {hole['face_ids']}")
 
     # 4. Generate PDF with model specifications and features
-    output_pdfpath = "output/drawing1.pdf"
+    output_pdfpath = "output/Part1_drawing.pdf"
 
-    generate_drawing_pdf(
-        cad_shape,
+
+    measure_time("Drawing generation",
+        generate_drawing_pdf,
+        cad_shape,  
         output_pdfpath,
         shape_information=information,
         face_information=faces,
@@ -95,6 +89,18 @@ def main():
         features=features,
         holes=holes
     )
+
+
+    
+    # generate_drawing_pdf(
+    #     cad_shape,
+    #     output_pdfpath,
+    #     shape_information=information,
+    #     face_information=faces,
+    #     edge_information=edges,
+    #     features=features,
+    #     holes=holes
+    # )
 
     print(f"Drawing generated successfully: {output_pdfpath}")
 
